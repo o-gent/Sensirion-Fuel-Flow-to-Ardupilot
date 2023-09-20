@@ -1,8 +1,14 @@
 #include <Arduino.h>
 #include <SensirionI2cSf06Lf.h>
 #include <Wire.h>
+#include <SD.h>
+#include <SPI.h>
 
 SensirionI2cSf06Lf sensor;
+File logFile;
+//SPIClass SPI(HSPI);
+
+void setup_fuelflow();
 
 static char errorMessage[128];
 static int16_t error;
@@ -16,42 +22,21 @@ float m = 1;//14.378;
 float c = 0;//-68.319;
 float total_consumed = 0.0;
 float total_consumed_counter_track = 0.0;
+bool sdstatus;
 
 
-void print_byte_array(uint8_t* array, uint16_t len) {
-    uint16_t i = 0;
-    Serial.print("0x");
-    for (; i < len; i++) {
-        Serial.print(array[i], HEX);
-    }
-}
-
-void setup() {
-    pinMode(D0, OUTPUT);
-    pinMode(LED_BUILTIN, OUTPUT);
-    
-
-    Serial.begin(115200);
+void setup_fuelflow() {
     Wire.begin();
-    sensor.begin(Wire, SF06_LF_I2C_ADDRESS);
 
+    sensor.begin(Wire, SF06_LF_I2C_ADDRESS);
     sensor.stopContinuousMeasurement();
+    
     delay(100);
+
     uint32_t productIdentifier = 0;
     uint8_t serialNumber[8] = {0};
-    error = sensor.readProductIdentifier(productIdentifier, serialNumber, 8);
-    if (error != NO_ERROR) {
-        Serial.print("Error trying to execute readProductIdentifier(): ");
-        errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
-        return;
-    }
-    Serial.print("productIdentifier: ");
-    Serial.print(productIdentifier);
-    Serial.print("\t");
-    Serial.print("serialNumber: ");
-    print_byte_array(serialNumber, 8);
-    Serial.println();
+    
+
     error = sensor.startH2oContinuousMeasurement();
     if (error != NO_ERROR) {
         Serial.print(
@@ -60,6 +45,29 @@ void setup() {
         Serial.println(errorMessage);
         return;
     }
+}
+
+
+void setup() {
+    pinMode(D0, OUTPUT);
+    pinMode(LED_BUILTIN, OUTPUT);
+    
+
+    Serial.begin(115200);
+
+    setup_fuelflow();
+    
+    SPI.begin(D8, D9, D10, D7);
+
+    sdstatus = !SD.begin(D7, SPI);
+    if (!sdstatus) {
+        Serial.println("Card Mount Failed");
+    }
+    else {
+        logFile = SD.open("ff.txt", FILE_WRITE);
+        Serial.println("SD started");
+    }
+    
 }
 
 void loop() {
@@ -84,21 +92,14 @@ void loop() {
     }
 
 
-    // subtract the last reading:
     total = total - readings[readIndex];
-    // read the sensor:
     readings[readIndex] = constrain(m*aFlow+c, 0, 1000);
-    // add value to total:
     total = total + readings[readIndex];
-    // handle index
     readIndex = readIndex + 1;
-    if (readIndex >= numReadings) {
-        readIndex = 0;
-    }
-    // calculate the average:
+    if (readIndex >= numReadings) { readIndex = 0; };
     average = total / numReadings;
-
     total_consumed = total_consumed + average * 0.005;
+
 
     if(total_consumed - total_consumed_counter_track > 1) {
         total_consumed_counter_track = total_consumed + constrain(total_consumed - 1 - total_consumed_counter_track, 0, 1);
@@ -107,24 +108,15 @@ void loop() {
         Serial.println(total_consumed_counter_track);
     };
 
-    Serial.print(esp_timer_get_time());
-    Serial.print("\t");
-    Serial.print("aFlow: ");
-    Serial.print(aFlow);
-    Serial.print("\t");
-    Serial.print("calFlow: ");
-    Serial.print(average);
-    Serial.print("\t");
-    Serial.print("total: ");
-    Serial.print(total_consumed);
-    Serial.print("\t");
-    Serial.print("aTemperature: ");
-    Serial.print(aTemperature);
-    Serial.print("\t");
-    Serial.print("aSignalingFlags: ");
-    Serial.print(aSignalingFlags);
-    Serial.println();
+    Serial.println(aFlow);
 
-
-
+    if(sdstatus){ 
+        logFile.print(esp_timer_get_time());    logFile.print(",");
+        logFile.print(aFlow);                   logFile.print(",");
+        logFile.print(average);                 logFile.print(",");
+        logFile.print(total_consumed);          logFile.print(",");
+        logFile.print(aTemperature);            logFile.print(",");
+        logFile.print(aSignalingFlags);         logFile.println();
+        logFile.flush();
+    }
 }
